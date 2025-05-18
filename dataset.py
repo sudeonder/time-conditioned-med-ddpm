@@ -15,21 +15,23 @@ import pandas as pd
 
 
 # Create a TorchIO operator that takes a 2-chan cond or 1-chan img → resized volume
+# instantiate once
 resizer = tio.Resize((192, 192, 144))
 
 def cond_img_resize(cond: np.ndarray, img: np.ndarray):
     """
-    cond: np.array shape (2,240,240,155)
-    img : np.array shape (1,240,240,155)
-    returns resized cond (2,192,192,144) and img (1,192,192,144)
+    Resize and reorder so that output shapes are:
+      cond → (2, 144, 192, 192)
+      img  → (1, 144, 192, 192)
     """
-    # TorchIO expects shape (C, X, Y, Z) as a TensorImage
-    cond_tio = tio.ScalarImage(tensor=cond)
-    img_tio  = tio.ScalarImage(tensor=img)
-    cond_r   = resizer(cond_tio).data.numpy()
-    img_r    = resizer(img_tio).data.numpy()
-    return cond_r, img_r
-
+    # cond, img come in as (C, X=240, Y=240, Z=155)
+    # after resize → (C, 192, 192, 144)
+    cond_r = resizer(tio.ScalarImage(tensor=cond)).data.numpy()
+    img_r  = resizer(tio.ScalarImage(tensor=img)).data.numpy()
+    # Now swap axes: (C, 192 (H), 192 (W), 144 (D)) → (C, D, H, W)
+    cond_swapped = cond_r.transpose(0, 3, 1, 2)
+    img_swapped  = img_r.transpose(0, 3, 1, 2)
+    return cond_swapped, img_swapped
 
 class NiftiImageGenerator(Dataset):
     def __init__(self, imagefolder, input_size, depth_size, transform=None):
@@ -187,9 +189,7 @@ class NiftiPairImageGenerator(Dataset):
 class MUTimeConditionedDataset(Dataset):
     """
     Flat-folder loader for MU-Glioma-Post with time-conditioning.
-    Expects:
-      mask_dir/  ← PatientID_xxx_Timepoint_n_tumorMask.nii.gz
-      img_dir/   ← PatientID_xxx_Timepoint_n_brain_t1c.nii.gz
+    Returns a dict with keys 'input' (mask+time) and 'target' (T1c).
     """
     def __init__(self,
                  mask_dir: str,
@@ -197,41 +197,44 @@ class MUTimeConditionedDataset(Dataset):
                  clinical_xlsx: str,
                  max_weeks: float,
                  transform=None):
-        # load and clean clinical sheet
+        # 1) Clinical DataFrame
         xls = pd.ExcelFile(clinical_xlsx)
-        sheet = xls.sheet_names[1]  # adapt if needed
+        sheet = xls.sheet_names[1]  # adjust if needed
         df = pd.read_excel(xls, sheet_name=sheet)
         df.columns = df.columns.str.strip()
         df['Patient_ID'] = df['Patient_ID'].astype(str).str.strip()
         df.set_index('Patient_ID', inplace=True)
         self.clin_df = df
+
+        # 2) Timepoint→column map
+        self.tp_col_map = {
+            int(m.group(1)): col
+            for col in df.columns
+            for m in [re.search(r'Timepoint_(\d+)', col)]
+            if m
+        }
+
+        self.mask_dir = mask_dir
+        self.img_dir  = img_dir
         self.max_weeks = max_weeks
         self.transform = transform
 
-        # build timepoint → column map
-        self.tp_col_map = {}
-        for col in df.columns:
-            m = re.search(r'Timepoint_(\d+)', col)
-            if m:
-                self.tp_col_map[int(m.group(1))] = col
-
-        # collect masks
+        # 3) Gather samples
         mask_paths = sorted(glob(os.path.join(mask_dir, '*.nii.gz')))
         self.samples = []
         for mask in mask_paths:
             fn = os.path.basename(mask)
             m = re.match(r'(PatientID_\d+)_Timepoint_(\d+)_tumorMask\.nii\.gz', fn)
-            if not m:
-                continue
+            if not m: continue
             pid, tp = m.group(1), int(m.group(2))
 
-            # find image
+            # corresponding image
             img_name = f"{pid}_Timepoint_{tp}_brain_t1c.nii.gz"
             img_path = os.path.join(img_dir, img_name)
             if not os.path.exists(img_path):
                 continue
 
-            # lookup clinic day
+            # get clinical day
             col = self.tp_col_map.get(tp)
             if col is None:
                 continue
@@ -241,32 +244,29 @@ class MUTimeConditionedDataset(Dataset):
                 continue
             days = float(raw)
 
-            # find baseline among this patient's masks
-            # --- FIXED HERE: compare basenames, not full paths ---
+            # find baseline (across this pid’s masks)
             pid_masks = [os.path.basename(p) 
                          for p in mask_paths 
                          if os.path.basename(p).startswith(pid)]
-            tps = [int(re.search(r'Timepoint_(\d+)', nm).group(1)) 
-                   for nm in pid_masks]
+            tps = [int(re.search(r'Timepoint_(\d+)', nm).group(1)) for nm in pid_masks]
             days_map = {}
             for otp in tps:
                 c2 = self.tp_col_map.get(otp)
-                if not c2:
-                    continue
-                raw2 = df.at[sid, c2] if sid in df.index else np.nan
-                if pd.notna(raw2) and raw2 > 0:
-                    days_map[otp] = float(raw2)
+                if not c2: continue
+                val = df.at[sid, c2] if sid in df.index else np.nan
+                if pd.notna(val) and val > 0:
+                    days_map[otp] = float(val)
             if not days_map:
                 continue
             base_tp = min(days_map, key=days_map.get)
             base_days = days_map[base_tp]
 
             # normalized Δt
-            dt_norm = np.clip(((days - base_days) / 7.0) / self.max_weeks, 0.0, 1.0)
+            dt_norm = np.clip(((days - base_days)/7.0)/self.max_weeks, 0.0, 1.0)
 
             self.samples.append({
-                'mask': mask,
-                'img': img_path,
+                'mask':    mask,
+                'img':     img_path,
                 'dt_norm': dt_norm
             })
 
@@ -277,13 +277,22 @@ class MUTimeConditionedDataset(Dataset):
 
     def __getitem__(self, idx):
         s = self.samples[idx]
+        # load & binarize mask
         mask = nib.load(s['mask']).get_fdata()[None].astype(np.float32)
         mask = (mask > 0).astype(np.float32)
+        # load & normalize image
         img = nib.load(s['img']).get_fdata()[None].astype(np.float32)
-        img = 2 * (img - img.min()) / (img.max() - img.min()) - 1
+        img = 2*(img - img.min())/(img.max()-img.min()) - 1
+        # time map
         tmap = np.full_like(mask, fill_value=s['dt_norm'])
         cond = np.concatenate([mask, tmap], axis=0)
 
+        # apply resize (if provided)
         if self.transform:
             cond, img = self.transform(cond, img)
-        return cond, img
+
+        # return raw (C, D, H, W) so DataLoader yields (B, C, D, H, W)
+        return {
+              'input':  torch.from_numpy(cond),
+              'target': torch.from_numpy(img)
+          }

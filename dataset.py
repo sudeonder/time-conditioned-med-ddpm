@@ -169,59 +169,98 @@ class NiftiPairImageGenerator(Dataset):
 
 ## MU-Glioma-Post dataset class 
 class MUTimeConditionedDataset(Dataset):
-    def __init__(self, root_dir, clinical_xlsx, max_weeks, transform=None):
-        self.root, self.transform, self.max_weeks = root_dir, transform, max_weeks
+    """
+    Expects two flat folders:
+      mask_dir/  containing PatientID_xxx_Timepoint_n_tumorMask.nii.gz
+      img_dir/   containing PatientID_xxx_Timepoint_n_brain_t1c.nii.gz
+    """
+    def __init__(self,
+                 mask_dir: str,
+                 img_dir: str,
+                 clinical_xlsx: str,
+                 max_weeks: float,
+                 transform=None):
+        self.mask_dir = mask_dir
+        self.img_dir = img_dir
+        self.transform = transform
+        self.max_weeks = max_weeks
+
+        # load clinical DataFrame
         df = pd.read_excel(clinical_xlsx, sheet_name='MU Glioma Post')
         self.clin_df = df.set_index('Patient_ID')
-        # map timepoint→column
+
+        # map Timepoint_n columns
         self.tp_col_map = {}
-        for c in self.clin_df.columns:
-            m = re.search(r'\( *Timepoint_(\d+) *\)', c)
-            if m: self.tp_col_map[int(m.group(1))] = c
+        for col in self.clin_df.columns:
+            m = re.search(r'\( *Timepoint_(\d+) *\)', col)
+            if m:
+                self.tp_col_map[int(m.group(1))] = col
+
+        # collect all mask files
+        mask_paths = glob(os.path.join(self.mask_dir, '*.nii.gz'))
         self.samples = []
-        for pid in sorted(os.listdir(self.root)):
-            pdir = os.path.join(self.root, pid)
-            if not os.path.isdir(pdir): continue
-            # available timepoints on disk
-            tps = sorted(int(m.group(1)) for m in
-                         (re.match(r'Timepoint_(\d+)',d) for d in os.listdir(pdir)) if m)
-            if not tps: continue
-            # days‐map from clinical
+        for mask in sorted(mask_paths):
+            fname = os.path.basename(mask)
+            m = re.match(r'(PatientID_\d+)_Timepoint_(\d+)_tumorMask\.nii\.gz', fname)
+            if not m:
+                continue
+            pid, tp = m.group(1), int(m.group(2))
+
+            # find corresponding image
+            img_name = f"{pid}_Timepoint_{tp}_brain_t1c.nii.gz"
+            img_path = os.path.join(self.img_dir, img_name)
+            if not os.path.exists(img_path):
+                continue
+
+            # get clinical days
+            col = self.tp_col_map.get(tp)
+            raw = self.clin_df.at[pid, col] if col in self.clin_df.columns else np.nan
+            if pd.isna(raw):
+                continue
+            days = float(raw)
+
+            # compute baseline days for this patient
+            # find all available tps for pid in mask_paths
+            pid_masks = [os.path.basename(p) for p in mask_paths if p.startswith(pid)]
+            tps = [int(re.search(r'Timepoint_(\d+)', nm).group(1)) for nm in pid_masks]
             days_map = {}
-            for tp in tps:
-                col = self.tp_col_map.get(tp)
-                raw = self.clin_df.at[pid, col] if col else np.nan
-                if pd.notna(raw): days_map[tp] = float(raw)
-            if not days_map: continue
+            for other_tp in tps:
+                col2 = self.tp_col_map.get(other_tp)
+                raw2 = self.clin_df.at[pid, col2] if col2 in self.clin_df.columns else np.nan
+                if pd.notna(raw2):
+                    days_map[other_tp] = float(raw2)
+            if not days_map:
+                continue
             base_tp = min(days_map, key=lambda k: days_map[k])
             base_days = days_map[base_tp]
-            base_folder = f"Timepoint_{base_tp}"
-            base_mask = os.path.join(pdir, base_folder,
-                                     f"{pid}_{base_folder}_tumorMask.nii.gz")
-            if not os.path.exists(base_mask): continue
-            for tp in tps:
-                if tp not in days_map: continue
-                dt_norm = np.clip(((days_map[tp]-base_days)/7.0)/self.max_weeks, 0,1)
-                img_path = os.path.join(pdir, f"Timepoint_{tp}",
-                                        f"{pid}_Timepoint_{tp}_brain_t1c.nii.gz")
-                if os.path.exists(img_path):
-                    self.samples.append({'mask0':base_mask,
-                                         'img':img_path,
-                                         'dt_norm':dt_norm})
+
+            # normalized delta t
+            dt_norm = np.clip(((days - base_days) / 7.0) / self.max_weeks, 0.0, 1.0)
+
+            self.samples.append({
+                'mask': mask,
+                'img': img_path,
+                'dt_norm': dt_norm
+            })
+
         print(f"MUTimeConditionedDataset: built {len(self.samples)} samples")
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        s = self.samples[idx]
-        mask0 = nib.load(s['mask0']).get_fdata().astype(np.float32)[None]
-        mask0 = (mask0>0).astype(np.float32)
-        img   = nib.load(s['img']).get_fdata().astype(np.float32)[None]
-        img   = 2*(img-img.min())/(img.max()-img.min())-1
-        tmap  = np.full_like(mask0, fill_value=s['dt_norm'])
-        cond  = np.concatenate([mask0, tmap], axis=0)
+        entry = self.samples[idx]
+        # load mask
+        mask = nib.load(entry['mask']).get_fdata().astype(np.float32)[None]
+        mask = (mask > 0).astype(np.float32)
+        # load image
+        img = nib.load(entry['img']).get_fdata().astype(np.float32)[None]
+        img = 2 * (img - img.min()) / (img.max() - img.min()) - 1
+        # time map
+        tmap = np.full_like(mask, fill_value=entry['dt_norm'])
+        cond = np.concatenate([mask, tmap], axis=0)
+
         if self.transform:
             cond, img = self.transform(cond, img)
-        return cond, img
 
+        return cond, img

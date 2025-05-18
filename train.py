@@ -9,7 +9,7 @@ from diffusion_model.trainer import GaussianDiffusion, Trainer
 from diffusion_model.unet import create_model
 
 from dataset import NiftiImageGenerator
-from datasets import MUTimeConditionedDataset
+from dataset import MUTimeConditionedDataset
 
 # GPU setup
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"

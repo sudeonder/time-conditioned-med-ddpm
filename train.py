@@ -8,8 +8,8 @@ from torchvision.transforms import Compose, Lambda
 from diffusion_model.trainer import GaussianDiffusion, Trainer
 from diffusion_model.unet import create_model
 
-from dataset import NiftiImageGenerator
-from dataset import MUTimeConditionedDataset
+from dataset import NiftiImageGenerator, MUTimeConditionedDataset
+import torchio as tio
 
 # GPU setup
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -25,10 +25,10 @@ parser.add_argument('--clinicalfile',         type=str, required=False,
                     help="Path to MU Glioma Post clinical Excel file")
 parser.add_argument('--maxweeks',             type=float, default=20.0,
                     help="Max number of weeks for normalizing Δt")
-parser.add_argument('--input_size',           type=int, default=128,
-                    help="Height and width of volumes")
-parser.add_argument('--depth_size',           type=int, default=128,
-                    help="Depth (number of slices) of volumes")
+parser.add_argument('--input_size',           type=int, default=192,
+                    help="Height and width of volumes (use 192 for BraTS4mod)")
+parser.add_argument('--depth_size',           type=int, default=144,
+                    help="Depth (number of slices) of volumes (use 144 for BraTS4mod)")
 parser.add_argument('--num_channels',         type=int, default=64,
                     help="Base feature channels in U-Net")
 parser.add_argument('--num_res_blocks',       type=int, default=1,
@@ -50,14 +50,34 @@ parser.add_argument('-r', '--resume_weight',  type=str, default="",
 args = parser.parse_args()
 
 # -----------------------------------------------------------------------------
-# Transforms
+# Resize transform: (240,240,155) → (192,192,144)
 # -----------------------------------------------------------------------------
-# Single-channel transform (maps [0,1] → [-1,1], adds channel dim, permutes to (C,D,H,W))
+resizer = tio.Compose([
+    tio.ToCanonical(),
+    tio.CropOrPad((240,240,155)),
+    tio.Resize((192,192,144))
+])
+
+def cond_img_resize(cond, img):
+    """
+    cond: numpy array shape (2,240,240,155)
+    img : numpy array shape (1,240,240,155)
+    returns resized cond,img to (2,192,192,144) and (1,192,192,144)
+    """
+    c_img = tio.ScalarImage(tensor=cond)
+    t_img = tio.ScalarImage(tensor=img)
+    c_res = resizer(c_img).data.numpy()
+    t_res = resizer(t_img).data.numpy()
+    return c_res, t_res
+
+# -----------------------------------------------------------------------------
+# Single-channel transform (for no-condition mode)
+# -----------------------------------------------------------------------------
 transform = Compose([
     Lambda(lambda t: torch.tensor(t).float()),
     Lambda(lambda t: (t * 2) - 1),
-    Lambda(lambda t: t.unsqueeze(0)),       # (1,H,W,D)
-    Lambda(lambda t: t.permute(0, 3, 1, 2)) # → (1, D, H, W)
+    Lambda(lambda t: t.unsqueeze(0)),        # (1,H,W,D)
+    Lambda(lambda t: t.permute(0, 3, 1, 2))  # → (1,D,H,W)
 ])
 
 # -----------------------------------------------------------------------------
@@ -69,7 +89,7 @@ if args.with_condition:
         root_dir=args.inputfolder,
         clinical_xlsx=args.clinicalfile,
         max_weeks=args.maxweeks,
-        transform=None  # MU dataset applies no extra transform here
+        transform=cond_img_resize
     )
 else:
     dataset = NiftiImageGenerator(
@@ -97,18 +117,18 @@ model = create_model(
 
 diffusion = GaussianDiffusion(
     model,
-    image_size   = args.input_size,
-    depth_size   = args.depth_size,
-    timesteps    = args.timesteps,
-    loss_type    = 'l1',
+    image_size     = args.input_size,
+    depth_size     = args.depth_size,
+    timesteps      = args.timesteps,
+    loss_type      = 'l1',
     with_condition = args.with_condition,
-    channels     = out_channels
+    channels       = out_channels
 ).cuda()
 
 # Optionally load pretrained or checkpoint weights
 if args.resume_weight:
     ckpt = torch.load(args.resume_weight, map_location='cuda')
-    # If checkpoint was saved under 'ema' key
+    # load EMA if present
     if 'ema' in ckpt:
         diffusion.load_state_dict(ckpt['ema'])
     else:
@@ -121,16 +141,16 @@ if args.resume_weight:
 trainer = Trainer(
     diffusion,
     dataset,
-    image_size               = args.input_size,
-    depth_size               = args.depth_size,
-    train_batch_size         = args.batchsize,
-    train_lr                 = args.train_lr,
-    train_num_steps          = args.epochs,
-    gradient_accumulate_every= 2,
-    ema_decay                = 0.995,
-    fp16                     = False,
-    with_condition           = args.with_condition,
-    save_and_sample_every    = args.save_and_sample_every,
+    image_size                = args.input_size,
+    depth_size                = args.depth_size,
+    train_batch_size          = args.batchsize,
+    train_lr                  = args.train_lr,
+    train_num_steps           = args.epochs,
+    gradient_accumulate_every = 2,
+    ema_decay                 = 0.995,
+    fp16                      = False,
+    with_condition            = args.with_condition,
+    save_and_sample_every     = args.save_and_sample_every,
 )
 
 # -----------------------------------------------------------------------------

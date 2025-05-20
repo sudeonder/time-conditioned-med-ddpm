@@ -196,7 +196,7 @@ class MUTimeConditionedDataset(Dataset):
                  img_dir: str,
                  clinical_xlsx: str,
                  max_weeks: float,
-                 transform=None):
+                 transform=cond_img_resize):
         # 1) Clinical DataFrame
         xls = pd.ExcelFile(clinical_xlsx)
         sheet = xls.sheet_names[1]  # adjust if needed

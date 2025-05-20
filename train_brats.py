@@ -56,12 +56,17 @@ args = parser.parse_args()
 # -----------------------------------------------------------------------------
 resizer = tio.Resize((args.input_size, args.input_size, args.depth_size))
 def cond_img_resize(cond: np.ndarray, img: np.ndarray):
-    # cond: (2,240,240,155), img: (1,240,240,155)
+
     cond_tio = tio.ScalarImage(tensor=cond)
     img_tio  = tio.ScalarImage(tensor=img)
-    cond_r   = resizer(cond_tio).data.numpy()
-    img_r    = resizer(img_tio).data.numpy()
-    return cond_r, img_r
+    # after resize → (C, H=192, W=192, D=144)
+    cond_r = resizer(cond_tio).data.numpy()
+    img_r  = resizer(img_tio).data.numpy()
+    # swap axes to (C, D, H, W)
+    cond_swapped = cond_r.transpose(0, 3, 1, 2)
+    img_swapped  = img_r.transpose(0, 3, 1, 2)
+    return cond_swapped, img_swapped
+
 
 # -----------------------------------------------------------------------------
 # Dataset

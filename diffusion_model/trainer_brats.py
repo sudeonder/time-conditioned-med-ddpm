@@ -397,6 +397,7 @@ class Trainer(object):
                     input_tensors = data['input'].cuda()
                     target_tensors = data['target'].cuda()
                     loss = self.model(target_tensors, condition_tensors=input_tensors)
+                
                 else:
                     data = next(self.dl).cuda()
                     loss = self.model(data)

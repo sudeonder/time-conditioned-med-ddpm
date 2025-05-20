@@ -5,7 +5,7 @@ python3 train_brats.py \
   --clinicalfile /content/data/Dataset_MU-Glioma-Post/MU-Glioma-Post_ClinicalData-FINAL032025.xlsx \
   --maxweeks     20 \
   --batchsize    1 \
-  --epochs       5 \
+  --epochs       2000 \
   --input_size   192 \
   --depth_size   144 \
   --num_channels 64 \

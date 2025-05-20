@@ -271,6 +271,29 @@ class MUTimeConditionedDataset(Dataset):
             })
 
         print(f"MUTimeConditionedDataset: built {len(self.samples)} samples")
+        
+    def sample_conditions(self, batch_size: int):
+        """
+        Randomly sample `batch_size` conditioning inputs (mask+time)
+        and return a CUDA tensor of shape (B, 2, D, H, W).
+        """
+        # 1) choose random indices
+        idxs = np.random.randint(0, len(self), size=batch_size)
+        conds = []
+        for i in idxs:
+            s = self.samples[i]
+            # load & binarize mask
+            mask = nib.load(s['mask']).get_fdata()[None].astype(np.float32)
+            mask = (mask > 0).astype(np.float32)
+            # time map
+            tmap = np.full_like(mask, fill_value=s['dt_norm'])
+            cond = np.concatenate([mask, tmap], axis=0)  # (2, H, W, D)
+            # resize + reorder
+            cond, _ = self.transform(cond, cond)       # we only need the first return
+            conds.append(torch.from_numpy(cond))
+        # stack and move to GPU
+        return torch.stack(conds, dim=0).cuda()
+
 
     def __len__(self):
         return len(self.samples)

@@ -97,26 +97,28 @@ class UNetModel(nn.Module):
         if self.num_classes is not None:
             self.label_emb = nn.Embedding(num_classes, time_embed_dim)
 
+        # ── stem conv ──
         ch = input_ch = int(channel_mult[0] * model_channels)
-        self.input_blocks = nn.ModuleList(
-            [TimestepEmbedSequential(conv_nd(dims, in_channels, ch, 3, padding=1))]
-        )
+        self.input_blocks = nn.ModuleList([
+            TimestepEmbedSequential(
+                conv_nd(dims, in_channels, ch, 3, padding=1)
+            )
+        ])
         self._feature_size = ch
         input_block_chans = [ch]
         ds = 1
 
-
-       # ── New: cross‐attention on the very first features ──
-       # (so the mask+time embedding can guide everything that follows)
+        # ── NEW: cross‐attention on the first features ──
+        #    lets the mask+time embedding guide all subsequent layers
         self.input_blocks.append(
-           TimestepEmbedSequential(
-               CrossAttentionBlock(ch)
-         )
-         )
-        # account for that extra feature (it doesn’t change channel count)
+            TimestepEmbedSequential(
+                CrossAttentionBlock(ch)
+            )
+        )
+        # count it (channel count unchanged)
         input_block_chans.append(ch)
         self._feature_size += ch
-         # ───────────────────────────────────────────────────
+        # ────────────────────────────────────────────────
         
         for level, mult in enumerate(channel_mult):
             for _ in range(num_res_blocks):

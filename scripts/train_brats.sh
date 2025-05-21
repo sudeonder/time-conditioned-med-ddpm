@@ -5,11 +5,11 @@ python3 train_brats.py \
   --clinicalfile /content/data/Dataset_MU-Glioma-Post/MU-Glioma-Post_ClinicalData-FINAL032025.xlsx \
   --maxweeks     20 \
   --batchsize    1 \
-  --epochs       2000 \
+  --epochs       3000 \
   --input_size   192 \
   --depth_size   144 \
-  --num_channels 64 \
+  --num_channels 6324 \
   --num_res_blocks 2 \
   --timesteps    250 \
-  --save_and_sample_every 1000 \
+  --save_and_sample_every 2000 \
   --resume_weight model/model_brats.pt

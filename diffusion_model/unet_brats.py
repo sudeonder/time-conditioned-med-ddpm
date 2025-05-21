@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from .fp16_util import convert_module_to_f16, convert_module_to_f32
 from .modules import *
+from .modules import CrossAttentionBlock
 
 NUM_CLASSES = 1
 
@@ -103,6 +104,20 @@ class UNetModel(nn.Module):
         self._feature_size = ch
         input_block_chans = [ch]
         ds = 1
+
+
+       # ── New: cross‐attention on the very first features ──
+       # (so the mask+time embedding can guide everything that follows)
+        self.input_blocks.append(
+           TimestepEmbedSequential(
+               CrossAttentionBlock(ch)
+         )
+         )
+        # account for that extra feature (it doesn’t change channel count)
+        input_block_chans.append(ch)
+        self._feature_size += ch
+         # ───────────────────────────────────────────────────
+        
         for level, mult in enumerate(channel_mult):
             for _ in range(num_res_blocks):
                 layers = [

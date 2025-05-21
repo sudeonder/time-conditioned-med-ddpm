@@ -12,6 +12,26 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 
+
+# modules.py
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, dim, heads=4, dim_head=32):
+        super().__init__()
+        inner_dim = dim_head * heads
+        self.to_q = nn.Conv3d(dim, inner_dim, 1, bias=False)
+        self.to_kv = nn.Conv3d(dim, inner_dim*2, 1, bias=False)
+        self.attend = nn.MultiheadAttention(inner_dim, heads)
+        self.to_out = nn.Conv3d(inner_dim, dim, 1)
+    def forward(self, x):
+        b, c, d, h, w = x.shape
+        q = self.to_q(x).reshape(b, -1, d*h*w).permute(2,0,1)
+        kv = self.to_kv(x).reshape(b, -1, d*h*w).permute(2,0,1)
+        k,v = kv.chunk(2, dim=-1)
+        attn, _ = self.attend(q, k, v)
+        attn = attn.permute(1,2,0).reshape(b, -1, d,h,w)
+        return self.to_out(attn) + x
+
+
 def checkpoint(func, inputs, params, flag):
     """
     Evaluate a function without caching intermediate activations, allowing for

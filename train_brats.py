@@ -86,7 +86,7 @@ else:
 # -----------------------------------------------------------------------------
 # Model & Diffusion setup
 # -----------------------------------------------------------------------------
-in_channels  = 3  # [mask, time_map, noise]
+in_channels  = 1 + 2*6 + 1  # [mask, time_map, noise]
 out_channels = 1  # single T1-c output
 
 model = create_model(

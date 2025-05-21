@@ -14,6 +14,14 @@ import os
 import pandas as pd
 
 
+
+def fourier_time_emb(dt_norm: float, L: int=6):
+    freqs = 2.0 ** np.arange(L)
+    angles = np.outer(freqs, 2*np.pi*dt_norm)  # shape (L,)
+    sincos = np.concatenate([np.sin(angles), np.cos(angles)], axis=0)  # (2L,)
+    return sincos  # shape (2L,)
+
+
 # Create a TorchIO operator that takes a 2-chan cond or 1-chan img → resized volume
 # instantiate once
 resizer = tio.Resize((192, 192, 144))
@@ -306,9 +314,18 @@ class MUTimeConditionedDataset(Dataset):
         # load & normalize image
         img = nib.load(s['img']).get_fdata()[None].astype(np.float32)
         img = 2*(img - img.min())/(img.max()-img.min()) - 1
+        # L = 6
+        ft = fourier_time_emb(s['dt_norm'], L=L)      # shape (2L,)
+        # now tile to full volume:
+        # mask: (1, D, H, W)
+        D,H,W = mask.shape[1:]
+        time_vol = np.zeros((2*L, D, H, W), dtype=np.float32)
+        for i, val in enumerate(ft):
+            time_vol[i] = val   # broadcast
+        cond = np.concatenate([mask, time_vol], axis=0)  # now C = 1+2L
         # time map
-        tmap = np.full_like(mask, fill_value=s['dt_norm'])
-        cond = np.concatenate([mask, tmap], axis=0)
+        #tmap = np.full_like(mask, fill_value=s['dt_norm'])
+        #cond = np.concatenate([mask, tmap], axis=0)
 
         # apply resize (if provided)
         if self.transform:

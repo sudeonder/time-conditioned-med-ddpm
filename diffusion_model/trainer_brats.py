@@ -427,11 +427,12 @@ class Trainer(object):
                 else:
                     all_images_list = list(map(lambda n: self.ema_model.sample(batch_size=n), batches))
                     all_images = torch.cat(all_images_list, dim=0)
-
+                
+                # fix this later TODO
                 t1_images = all_images[:, 0, ...]
-                t1ce_images = all_images[:, 1, ...]
-                t2_images = all_images[:, 2, ...]
-                flair_images = all_images[:, 3, ...]
+                t1ce_images = all_images[:, 0, ...]
+                t2_images = all_images[:, 0, ...]
+                flair_images = all_images[:, 0, ...]
                     
                 t1_images = torch.squeeze(t1_images)
                 t1_images = t1_images.transpose(2, 0)

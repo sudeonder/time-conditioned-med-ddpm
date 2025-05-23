@@ -314,7 +314,7 @@ class MUTimeConditionedDataset(Dataset):
         # load & normalize image
         img = nib.load(s['img']).get_fdata()[None].astype(np.float32)
         img = 2*(img - img.min())/(img.max()-img.min()) - 1
-        # L = 6
+        L = 6
         ft = fourier_time_emb(s['dt_norm'], L=L)      # shape (2L,)
         # now tile to full volume:
         # mask: (1, D, H, W)
